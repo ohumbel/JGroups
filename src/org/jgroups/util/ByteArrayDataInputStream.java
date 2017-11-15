@@ -1,9 +1,6 @@
 package org.jgroups.util;
 
-import java.io.DataInput;
-import java.io.EOFException;
-import java.io.IOException;
-import java.io.UTFDataFormatException;
+import java.io.*;
 import java.nio.ByteBuffer;
 
 /**
@@ -11,7 +8,7 @@ import java.nio.ByteBuffer;
  * @author Bela Ban
  * @since  3.5
  */
-public class ByteArrayDataInputStream implements DataInput {
+public class ByteArrayDataInputStream extends InputStream implements DataInput {
     protected final byte[] buf;
     protected int          pos;   // current position to read next byte from buf
 
@@ -56,10 +53,10 @@ public class ByteArrayDataInputStream implements DataInput {
 
 
     /**
-     * Reads the next byte of data from buf. The value byte is returned as an <code>int</code> in the range
-     * <code>0</code> to <code>255</code>. If no byte is available because the end of the buffer has been reached,
-     * the value <code>-1</code> is returned.
-     * @return  the next byte of data, or <code>-1</code> if the end of the stream has been reached.
+     * Reads the next byte of data from buf. The value byte is returned as an {@code int} in the range {@code 0} to
+     * {@code 255}. If no byte is available because the end of the buffer has been reached, the value {@code -1} is
+     * returned.
+     * @return  the next byte of data, or {@code -1} if the end of the stream has been reached.
      */
     public int read() {
         return (pos < limit) ? (buf[pos++] & 0xff) : -1;

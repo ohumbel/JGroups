@@ -1,17 +1,11 @@
 package org.jgroups.protocols;
 
-import org.jgroups.Address;
-import org.jgroups.Event;
-import org.jgroups.Message;
-import org.jgroups.View;
+import org.jgroups.*;
 import org.jgroups.annotations.ManagedAttribute;
 import org.jgroups.annotations.ManagedOperation;
 import org.jgroups.annotations.Property;
 import org.jgroups.stack.Protocol;
-import org.jgroups.util.AsciiString;
-import org.jgroups.util.BoundedHashMap;
-import org.jgroups.util.MessageBatch;
-import org.jgroups.util.Util;
+import org.jgroups.util.*;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
@@ -94,6 +88,9 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
     // SecureRandom instance for generating IV's
     protected SecureRandom                  secure_random = new SecureRandom();
 
+    protected MessageFactory                msg_factory;
+
+
     /**
      * Sets the key store entry used to configure this protocol.
      * @param entry a key store entry
@@ -118,6 +115,7 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
     public SecureRandom             secureRandom()                  {return this.secure_random;}
     /** Allows callers to replace secure_random with impl of their choice, e.g. for performance reasons. */
     public <T extends Encrypt<E>> T secureRandom(SecureRandom sr)   {this.secure_random = sr; return (T)this;}
+    public <T extends Encrypt<E>> T msgFactory(MessageFactory f)    {this.msg_factory=f; return (T)this;}
     @ManagedAttribute public String version()                       {return Util.byteArrayToHexString(sym_version);}
 
 
@@ -136,6 +134,9 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
         }
         key_map=new BoundedHashMap<>(key_map_max_size);
         initSymCiphers(sym_algorithm, secret_key);
+        TP transport=getTransport();
+        if(transport != null)
+            msg_factory=transport.getMessageFactory();
     }
 
 
@@ -272,7 +273,7 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
 
     protected Object handleEncryptedMessage(Message msg) throws Exception {
         // decrypt the message; we need to copy msg as we modify its buffer (http://jira.jboss.com/jira/browse/JGRP-538)
-        Message tmpMsg=decryptMessage(null, msg.copy()); // need to copy for possible xmits
+        Message tmpMsg=decryptMessage(null, msg.copy(true, true)); // need to copy for possible xmits
         return tmpMsg != null? up_prot.up(tmpMsg) : null;
     }
 
@@ -309,23 +310,27 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
             }
             log.trace("%s: decrypting msg from %s using previous key version %s",
                       local_addr, msg.src(), Util.byteArrayToHexString(hdr.version()));
-            return _decrypt(cipher, key, msg, hdr.iv());
+            return _decrypt(cipher, key, msg, hdr);
         }
-        return _decrypt(cipher, secret_key, msg, hdr.iv());
+        return _decrypt(cipher, secret_key, msg, hdr);
     }
 
-    protected Message _decrypt(final Cipher cipher, Key key, Message msg, byte[] iv) throws Exception {
-        if(msg.getLength() == 0)
+    protected Message _decrypt(final Cipher cipher, Key key, Message msg, EncryptHeader hdr) throws Exception {
+        if(!msg.hasPayload())
             return msg;
 
         byte[] decrypted_msg;
         if(cipher == null)
-            decrypted_msg=code(msg.getRawBuffer(), msg.getOffset(), msg.getLength(), iv, true);
+            decrypted_msg=code(msg.getArray(), msg.getOffset(), msg.getLength(), hdr.iv(), true);
         else {
-            initCipher(cipher, Cipher.DECRYPT_MODE, key, iv);
-            decrypted_msg=cipher.doFinal(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+            initCipher(cipher, Cipher.DECRYPT_MODE, key, hdr.iv());
+            decrypted_msg=cipher.doFinal(msg.getArray(), msg.getOffset(), msg.getLength());
         }
-        return msg.setBuffer(decrypted_msg);
+        if(hdr.needsDeserialization())
+            msg=Util.messageFromBuffer(decrypted_msg, 0, decrypted_msg.length, msg_factory);
+        else
+            msg.setArray(decrypted_msg, 0, decrypted_msg.length);
+        return msg.setArray(decrypted_msg, 0, decrypted_msg.length);
     }
 
     protected Message encrypt(Message msg) throws Exception {
@@ -333,12 +338,12 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
 
         // copy needed because same message (object) may be retransmitted -> prevent double encryption
         Message msgEncrypted=msg.copy(false).putHeader(this.id, hdr);
-        byte[] payload=msg.getRawBuffer();
+        byte[] payload=msg.getArray();
         if(payload != null) {
             if(msg.getLength() > 0)
-                msgEncrypted.setBuffer(code(payload, msg.getOffset(), msg.getLength(), hdr.iv(), false));
+                msgEncrypted.setArray(code(payload, msg.getOffset(), msg.getLength(), hdr.iv(), false));
             else // length is 0, but buffer may be "" (empty, but *not null* buffer)! [JGRP-2153]
-                msgEncrypted.setBuffer(payload, msg.getOffset(), msg.getLength());
+                msgEncrypted.setArray(payload, msg.getOffset(), msg.getLength());
         }
         return msgEncrypted;
     }
@@ -391,7 +396,7 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
                 return;
             }
             try {
-                Message tmpMsg=decryptMessage(cipher, msg.copy()); // need to copy for possible xmits
+                Message tmpMsg=decryptMessage(cipher, msg.copy(true, true)); // need to copy for possible xmits
                 if(tmpMsg != null)
                     batch.replace(msg, tmpMsg);
                 else
@@ -399,7 +404,7 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
             }
             catch(Exception e) {
                 log.error("%s: failed decrypting message from %s (offset=%d, length=%d, buf.length=%d): %s, headers are %s",
-                          local_addr, msg.getSrc(), msg.getOffset(), msg.getLength(), msg.getRawBuffer().length, e, msg.printHeaders());
+                          local_addr, msg.getSrc(), msg.getOffset(), msg.getLength(), msg.getArray().length, e, msg.printHeaders());
                 batch.remove(msg);
             }
         }

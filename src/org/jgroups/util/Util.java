@@ -36,6 +36,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -495,6 +496,65 @@ public class Util {
         return bits&=~flag;
     }
 
+    public static String flagsToString(short flags) {
+        StringBuilder sb=new StringBuilder();
+        boolean first=true;
+
+        Message.Flag[] all_flags=Message.Flag.values();
+        for(Message.Flag flag: all_flags) {
+            if(isFlagSet(flags, flag)) {
+                if(first)
+                    first=false;
+                else
+                    sb.append("|");
+                sb.append(flag);
+            }
+        }
+        return sb.toString();
+    }
+
+    public static String transientFlagsToString(short flags) {
+        StringBuilder sb=new StringBuilder();
+        boolean first=true;
+
+        Message.TransientFlag[] all_flags=Message.TransientFlag.values();
+        for(Message.TransientFlag flag: all_flags) {
+            if(isTransientFlagSet(flags, flag)) {
+                if(first)
+                    first=false;
+                else
+                    sb.append("|");
+                sb.append(flag);
+            }
+        }
+        return sb.toString();
+    }
+
+    public static boolean isFlagSet(short flags, Message.Flag flag) {
+        return flag != null && ((flags & flag.value()) == flag.value());
+    }
+
+    public static boolean isTransientFlagSet(short flags, Message.TransientFlag flag) {
+        return flag != null && (flags & flag.value()) == flag.value();
+    }
+
+    /**
+     * Copies a message. Copies only headers with IDs >= starting_id or IDs which are in the copy_only_ids list
+     * @param copy_buffer
+     * @param starting_id
+     * @param copy_only_ids
+     * @return
+     */
+    public static Message copy(Message msg, boolean copy_buffer, short starting_id, short... copy_only_ids) {
+        Message retval=msg.copy(copy_buffer, false);
+        for(Map.Entry<Short,Header> entry: msg.getHeaders().entrySet()) {
+            short id=entry.getKey();
+            if(id >= starting_id || Util.containsId(id, copy_only_ids))
+                retval.putHeader(id, entry.getValue());
+        }
+        return retval;
+    }
+
 
     /**
      * Creates an object from a byte buffer
@@ -544,6 +604,48 @@ public class Util {
         }
     }
 
+    /**
+     * Parses an object from a {@link ByteBuffer}. Note that this changes the position of the buffer, so it this is
+     * not desired, use {@link ByteBuffer#duplicate()} to create a copy and pass the copy to this method.
+     */
+    public static <T extends Object> T objectFromByteBuffer(ByteBuffer buffer, ClassLoader loader) throws Exception {
+        if(buffer == null) return null;
+        byte type=buffer.get();
+        switch(type) {
+            case TYPE_NULL:    return null;
+            case TYPE_STREAMABLE:
+                DataInput in=new ByteBufferInputStream(buffer);
+                return readGenericStreamable(in, loader);
+            case TYPE_SERIALIZABLE: // the object is Externalizable or Serializable
+                InputStream in_stream=new ByteBufferInputStream(buffer);
+                try(ObjectInputStream oin=new ObjectInputStreamWithClassloader(in_stream, loader)) {
+                    return (T)oin.readObject();
+                }
+            case TYPE_BOOLEAN: return (T)(Boolean)(buffer.get() == 1);
+            case TYPE_BYTE:    return (T)(Byte)buffer.get();
+            case TYPE_CHAR:    return (T)(Character)Bits.readChar(buffer);
+            case TYPE_DOUBLE:  return (T)(Double)Bits.readDouble(buffer);
+            case TYPE_FLOAT:   return (T)(Float)Bits.readFloat(buffer);
+            case TYPE_INT:     return (T)(Integer)Bits.readInt(buffer);
+            case TYPE_LONG:    return (T)(Long)Bits.readLong(buffer);
+            case TYPE_SHORT:   return (T)(Short)Bits.readShort(buffer);
+            case TYPE_BYTEARRAY:
+                byte[] tmp=new byte[buffer.remaining()];
+                buffer.get(tmp);
+                return (T)tmp;
+            case TYPE_STRING:
+                tmp=new byte[buffer.remaining()];
+                buffer.get(tmp);
+                return (T)new String(tmp);
+            case TYPE_UTF_STRING:
+                in=new ByteBufferInputStream(buffer);
+                return (T)in.readUTF();
+            default:
+                throw new IllegalArgumentException("type " + type + " is invalid");
+        }
+    }
+
+
 
     /**
      * Serializes/Streams an object into a byte buffer.
@@ -576,9 +678,9 @@ public class Util {
     }
 
 
-    public static Buffer objectToBuffer(Object obj) throws IOException {
+    public static ByteArray objectToBuffer(Object obj) throws IOException {
         if(obj == null)
-            return new Buffer(TYPE_NULL_ARRAY);
+            return new ByteArray(TYPE_NULL_ARRAY);
 
         if(obj instanceof Streamable) {
             int expected_size=obj instanceof SizeStreamable? ((SizeStreamable)obj).serializedSize() : 512;
@@ -598,7 +700,7 @@ public class Util {
                 return out_stream.getBuffer();
             }
         }
-        return new Buffer(marshalPrimitiveType(type, obj));
+        return new ByteArray(marshalPrimitiveType(type, obj));
     }
 
 
@@ -798,6 +900,8 @@ public class Util {
         return streamableFromByteBuffer(factory, buffer, 0, buffer.length);
     }
 
+
+
     /**
      * Poor man's serialization of an exception. Serializes only the message, stack trace and cause (not suppressed exceptions)
      */
@@ -825,7 +929,7 @@ public class Util {
         writeException(causes, t, out);
     }
 
-    public static Buffer exceptionToBuffer(Throwable t) throws IOException {
+    public static ByteArray exceptionToBuffer(Throwable t) throws IOException {
         ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(512, true);
         exceptionToStream(t, out);
         return out.getBuffer();
@@ -970,6 +1074,14 @@ public class Util {
         return retval;
     }
 
+    public static <T extends Streamable> T streamableFromByteBuffer(Class<? extends Streamable> cl, ByteBuffer buffer) throws Exception {
+        if(buffer == null) return null;
+        DataInput in=new ByteBufferInputStream(buffer);
+        T retval=(T)cl.newInstance();
+        retval.readFrom(in);
+        return retval;
+    }
+
     public static <T extends Streamable> T streamableFromByteBuffer(Supplier<T> factory, byte[] buffer, int offset, int length) throws Exception {
         if(buffer == null) return null;
         DataInput in=new ByteArrayDataInputStream(buffer,offset,length);
@@ -991,16 +1103,53 @@ public class Util {
         return Arrays.copyOf(out.buffer(), out.position());
     }
 
-    public static Buffer streamableToBuffer(Streamable obj) {
+    public static ByteArray streamableToBuffer(Streamable obj) throws Exception {
         int expected_size=obj instanceof SizeStreamable? ((SizeStreamable)obj).serializedSize() +1 : 512;
         final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(expected_size);
-        try {
-            Util.writeStreamable(obj,out);
-            return out.getBuffer();
+        Util.writeStreamable(obj,out);
+        return out.getBuffer();
+    }
+
+    public static ByteArray messageToBuffer(Message msg) throws Exception {
+        int expected_size=msg.size() +1;
+        final ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(expected_size);
+        out.write(msg.getType());
+        msg.writeTo(out);
+        return out.getBuffer();
+    }
+
+
+    public static Message messageFromBuffer(byte[] buf, MessageFactory mf) throws Exception {
+        return messageFromBuffer(buf, 0, buf.length, mf);
+    }
+
+    public static Message messageFromBuffer(byte[] buf, int offset, int length, MessageFactory mf) throws Exception {
+        ByteArrayDataInputStream in=new ByteArrayDataInputStream(buf, offset, length);
+        byte type=in.readByte();
+        Message msg=mf.create(type);
+        msg.readFrom(in);
+        return msg;
+    }
+
+    public static ByteArray messageToByteBuffer(Message msg) throws Exception {
+        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream(msg.size() +2);
+        out.writeBoolean(msg != null);
+        if(msg != null) {
+            out.write(msg.getType());
+            msg.writeTo(out);
         }
-        catch(Exception ex) {
+        return out.getBuffer();
+    }
+
+
+    public static Message messageFromByteBuffer(byte[] buffer, int offset, int length, MessageFactory mf) throws Exception {
+        DataInput in=new ByteArrayDataInputStream(buffer,offset,length);
+        if(!in.readBoolean())
             return null;
-        }
+        byte type=in.readByte();
+        Message msg=mf.create(type);
+        msg.readFrom(in);
+        return msg;
     }
 
 
@@ -1100,15 +1249,16 @@ public class Util {
         if(multicast)
             flags+=MULTICAST;
         dos.writeByte(flags);
+        dos.write(msg.getType());
         msg.writeTo(dos);
     }
 
-    public static Message readMessage(DataInput instream) throws IOException, ClassNotFoundException {
-        Message msg=new Message(false); // don't create headers, readFrom() will do this
-        msg.readFrom(instream);
+    public static Message readMessage(DataInput in, MessageFactory mf) throws IOException, ClassNotFoundException {
+        byte type=in.readByte();
+        Message msg=mf.create(type);
+        msg.readFrom(in);
         return msg;
     }
-
 
 
     /**
@@ -1132,8 +1282,10 @@ public class Util {
         writeMessageListHeader(dest, src, cluster_name, msgs != null ? msgs.size() : 0, dos, multicast);
 
         if(msgs != null)
-            for(Message msg: msgs)
+            for(Message msg: msgs) {
+                dos.write(msg.getType());
                 msg.writeToNoAddrs(src, dos, transport_id); // exclude the transport header
+            }
     }
 
     public static void writeMessageListHeader(Address dest, Address src, byte[] cluster_name, int numMsgs, DataOutput dos, boolean multicast) throws IOException {
@@ -1157,7 +1309,8 @@ public class Util {
     }
 
 
-    public static List<Message> readMessageList(DataInput in, short transport_id) throws IOException, ClassNotFoundException {
+    public static List<Message> readMessageList(DataInput in, short transport_id, MessageFactory mf)
+      throws IOException, ClassNotFoundException {
         List<Message> list=new LinkedList<>();
         Address dest=Util.readAddress(in);
         Address src=Util.readAddress(in);
@@ -1170,7 +1323,8 @@ public class Util {
         int len=in.readInt();
 
         for(int i=0; i < len; i++) {
-            Message msg=new Message(false);
+            byte type=in.readByte(); // skip the
+            Message msg=mf.create(type);
             msg.readFrom(in);
             msg.setDest(dest);
             if(msg.getSrc() == null)
@@ -1196,7 +1350,8 @@ public class Util {
      * @return an array of 4 MessageBatches in the order above, the first batch is at index 0
      * @throws Exception
      */
-    public static MessageBatch[] readMessageBatch(DataInput in, boolean multicast) throws IOException, ClassNotFoundException {
+    public static MessageBatch[] readMessageBatch(DataInput in, boolean multicast, MessageFactory factory)
+      throws IOException, ClassNotFoundException {
         MessageBatch[] batches=new MessageBatch[4]; // [0]: reg, [1]: OOB, [2]: internal-oob, [3]: internal
         Address dest=Util.readAddress(in);
         Address src=Util.readAddress(in);
@@ -1207,7 +1362,8 @@ public class Util {
 
         int len=in.readInt();
         for(int i=0; i < len; i++) {
-            Message msg=new Message(false);
+            byte type=in.readByte();
+            Message msg=factory.create(type);  // new BytesMessage(false);
             msg.readFrom(in);
             msg.setDest(dest);
             if(msg.getSrc() == null)
@@ -1249,6 +1405,7 @@ public class Util {
         if(msg_consumer == null && batch_consumer == null)
             return;
         byte[] tmp=new byte[Global.INT_SIZE];
+        MessageFactory mf=new DefaultMessageFactory();
         try(DataInputStream dis=new DataInputStream(input)) {
             for(;;) {
                 // for TCP, we send the length first; this needs to be skipped as it is not part of the JGroups payload
@@ -1272,7 +1429,7 @@ public class Util {
                 boolean is_message_list=(flags & LIST) == LIST;
                 boolean multicast=(flags & MULTICAST) == MULTICAST;
                 if(is_message_list) { // used if message bundling is enabled
-                    MessageBatch[] batches=Util.readMessageBatch(dis,multicast);
+                    final MessageBatch[] batches=Util.readMessageBatch(dis,multicast, mf);
                     for(MessageBatch batch: batches) {
                         if(batch == null)
                             continue;
@@ -1285,7 +1442,7 @@ public class Util {
                     }
                 }
                 else {
-                    Message msg=Util.readMessage(dis);
+                    Message msg=Util.readMessage(dis, mf);
                     if(msg_consumer != null)
                         msg_consumer.accept(version, msg);
                 }
@@ -1567,6 +1724,17 @@ public class Util {
         return retval;
     }
 
+    public static int size(SizeStreamable s) {
+        int retval=Global.BYTE_SIZE;
+        if(s == null)
+            return retval;
+        retval+=Global.SHORT_SIZE; // magic number
+        short magic_number=ClassConfigurator.getMagicNumber(s.getClass());
+        if(magic_number == -1)
+            retval+=Bits.sizeUTF(s.getClass().getName());
+        return retval + s.serializedSize();
+    }
+
     public static void writeGenericStreamable(Streamable obj, DataOutput out) throws IOException {
         short magic_number;
         String classname;
@@ -1785,24 +1953,6 @@ public class Util {
             return buf;
         }
         return null;
-    }
-
-
-    public static Buffer messageToByteBuffer(Message msg) throws IOException {
-        ByteArrayDataOutputStream out=new ByteArrayDataOutputStream((int)msg.size()+1);
-        out.writeBoolean(msg != null);
-        if(msg != null)
-            msg.writeTo(out);
-        return out.getBuffer();
-    }
-
-    public static Message byteBufferToMessage(byte[] buffer,int offset,int length) throws IOException, ClassNotFoundException {
-        DataInput in=new ByteArrayDataInputStream(buffer,offset,length);
-        if(!in.readBoolean())
-            return null;
-        Message msg=new Message(false); // don't create headers, readFrom() will do this
-        msg.readFrom(in);
-        return msg;
     }
 
 
@@ -2064,6 +2214,40 @@ public class Util {
                 array[other]=tmp;
             }
         }
+    }
+
+
+    public static <T> Enumeration<T> enumerate(final T[] array, int offset, final int length) {
+        return new Enumeration() {
+            protected int end_pos=offset+length;
+            protected int pos=offset;
+            public boolean hasMoreElements() {
+                return pos < end_pos;
+            }
+
+            public T nextElement() {
+                if(pos < end_pos)
+                    return array[pos++];
+                throw new NoSuchElementException(String.format("pos=%d, end_pos=%d", pos, end_pos));
+            }
+        };
+    }
+
+
+    public static <T,R> Enumeration<R> enumerate(final T[] array, int offset, final int length, Function<T,R> converter) {
+        return new Enumeration() {
+            protected int end_pos=offset+length;
+            protected int pos=offset;
+            public boolean hasMoreElements() {
+                return pos < end_pos;
+            }
+
+            public R nextElement() {
+                if(pos < end_pos)
+                    return converter.apply(array[pos++]);
+                throw new NoSuchElementException(String.format("pos=%d, end_pos=%d", pos, end_pos));
+            }
+        };
     }
 
 

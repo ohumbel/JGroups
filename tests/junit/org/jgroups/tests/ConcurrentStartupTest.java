@@ -112,9 +112,9 @@ public class ConcurrentStartupTest {
         }
 
         public void receive(Message msg) {
-            if(msg.getBuffer() == null)
+            if(msg.getArray() == null)
                 return;
-            Integer number=(Integer)msg.getObject();
+            Integer number=msg.getObject();
             synchronized(state) {
                 state.add(number);
                 System.out.println(ch.getAddress() + ": <-- " + number + " from " + msg.getSrc() + ", state: " + state);
@@ -129,7 +129,7 @@ public class ConcurrentStartupTest {
 
         @SuppressWarnings("unchecked")
         public void setState(InputStream istream) throws Exception {
-            List<Integer> tmp=(List<Integer>)Util.objectFromStream(new DataInputStream(istream));
+            List<Integer> tmp=Util.objectFromStream(new DataInputStream(istream));
             synchronized(state) {
                 state.clear();
                 state.addAll(tmp);

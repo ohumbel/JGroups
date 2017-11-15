@@ -79,7 +79,7 @@ public class FragTest {
         int offset=0;
 
         for(int i=1; i <= NUM_MSGS; i++) {
-            Message big_msg=new Message(b.getAddress(), big_buffer, offset, MSG_SIZE);
+            Message big_msg=new BytesMessage(b.getAddress(), big_buffer, offset, MSG_SIZE);
             a.send(big_msg);
             offset+=MSG_SIZE;
         }
@@ -107,9 +107,9 @@ public class FragTest {
         frag.setValue("frag_size", 5000);
 
         Address dest=b.getAddress();
-        Message first=new Message(dest, new Payload(1, 10));
-        Message big=new Message(dest, new Payload(2, 12000)); // frag_size is 5000, so FRAG{2} will create 3 fragments
-        Message last=new Message(dest, new Payload(3, 10));
+        Message first=new BytesMessage(dest, new Payload(1, 10));
+        Message big=new BytesMessage(dest, new Payload(2, 12000)); // frag_size is 5000, so FRAG{2} will create 3 fragments
+        Message last=new BytesMessage(dest, new Payload(3, 10));
 
         a.send(first);
         a.send(big);
@@ -137,7 +137,7 @@ public class FragTest {
         byte[] buf=message.getBytes();
         MyReceiver r=new MyReceiver();
         b.setReceiver(r);
-        a.send(new Message(b.getAddress(), buf).setFlag(Message.Flag.OOB));
+        a.send(new BytesMessage(b.getAddress(), buf).setFlag(Message.Flag.OOB));
         for(int i=0; i < 10; i++) {
             String msg=r.msg();
             if(msg != null) {
@@ -165,7 +165,7 @@ public class FragTest {
     }
 
     protected static Message createMessage(Address dest, int size) {
-        return new Message(dest, new byte[size]);
+        return new BytesMessage(dest, new byte[size]);
     }
 
 
@@ -198,7 +198,7 @@ public class FragTest {
         protected String msg;
         public String msg() {return msg;}
         public void receive(Message msg) {
-            this.msg=new String(msg.getRawBuffer(), msg.getOffset(), msg.getLength());
+            this.msg=new String(msg.getArray(), msg.getOffset(), msg.getLength());
         }
     }
 

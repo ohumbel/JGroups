@@ -26,7 +26,7 @@ public class ByteArrayDataInputOutputStreamTest {
         byte[] tmp="hello world".getBytes();
         out.writeInt(tmp.length);
         out.write(tmp);
-        ByteBuffer input_buf=out.getByteBuffer();
+        ByteBuffer input_buf=ByteBuffer.wrap(out.buffer(), 0, out.position());
 
         ByteArrayDataInputStream in=new ByteArrayDataInputStream(input_buf);
         int length=in.readInt();
