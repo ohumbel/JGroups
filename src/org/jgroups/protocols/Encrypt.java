@@ -326,10 +326,6 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
             initCipher(cipher, Cipher.DECRYPT_MODE, key, hdr.iv());
             decrypted_msg=cipher.doFinal(msg.getArray(), msg.getOffset(), msg.getLength());
         }
-        if(hdr.needsDeserialization())
-            msg=Util.messageFromBuffer(decrypted_msg, 0, decrypted_msg.length, msg_factory);
-        else
-            msg.setArray(decrypted_msg, 0, decrypted_msg.length);
         return msg.setArray(decrypted_msg, 0, decrypted_msg.length);
     }
 
@@ -337,7 +333,7 @@ public abstract class Encrypt<E extends KeyStore.Entry> extends Protocol {
         EncryptHeader hdr=new EncryptHeader((byte)0, symVersion(), makeIv());
 
         // copy needed because same message (object) may be retransmitted -> prevent double encryption
-        Message msgEncrypted=msg.copy(false).putHeader(this.id, hdr);
+        Message msgEncrypted=msg.copy(false, true).putHeader(this.id, hdr);
         byte[] payload=msg.getArray();
         if(payload != null) {
             if(msg.getLength() > 0)
